@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SMS SENDER</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;600&display=swap');
+        .bangla-input { font-family: 'Hind Siliguri', sans-serif; }
+        .rate-limit-bar { height: 4px; transition: width 0.3s ease; }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <div class="mb-4">
+                <div class="rate-limit-bar bg-gray-200 rounded-full">
+                    <div class="rate-limit-progress bg-blue-600 rounded-full h-full"></div>
+                </div>
+                <div id="rateLimitText" class="text-sm text-gray-500 text-right mt-1">5 messages remaining</div>
+            </div>
+
+            <h1 class="text-3xl font-bold text-center mb-6 text-blue-600">SMS Sender By Hululu</h1>
+            
+            <form id="smsForm" class="space-y-4">
+                <div>
+                    <label class="block text-gray-700 mb-2">Phone Number</label>
+                    <input type="tel" id="to" 
+                           class="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                           placeholder="01XXXXXXXXX" 
+                           pattern="01\d{9}"
+                           required>
+                    <div class="text-sm text-red-500 hidden mt-1" id="numberError">Invalid Bangladeshi phone number format</div>
+                </div>
+
+                <div>
+                    <label class="block text-gray-700 mb-2">Message (160 characters only)</label>
+                    <textarea id="msg" rows="4"
+                              class="w-full p-3 border rounded-lg bangla-input"
+                              placeholder="Type your message here..."
+                              maxlength="160"
+                              required></textarea>
+                </div>
+
+                <button type="submit" 
+                        class="w-full bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-lg font-semibold transition-colors disabled:bg-gray-400"
+                        id="submitBtn">
+                    Send SMS
+                </button>
+            </form>
+
+            <div id="response" class="mt-4 p-4 rounded-lg hidden"></div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_USER = 'rtrahat';
+        const API_KEY = '2009d48c20204f962999623c1da4c97e';
+        const MAX_MESSAGES = 5;
+        const RATE_LIMIT_DURATION = 60 * 60 * 1000; // 1 hour
+
+        // Elements
+        const form = document.getElementById('smsForm');
+        const responseDiv = document.getElementById('response');
+        const charCount = document.getElementById('charCount');
+        const msgField = document.getElementById('msg');
+        const rateLimitProgress = document.querySelector('.rate-limit-progress');
+        const rateLimitText = document.getElementById('rateLimitText');
+        const submitBtn = document.getElementById('submitBtn');
+
+        // Rate limiting storage
+        let sendHistory = JSON.parse(localStorage.getItem('smsSendHistory')) || [];
+
+        // Initialize UI
+        updateRateLimitUI();
+
+        // Character counter with style changes
+        msgField.addEventListener('input', () => {
+            const length = msgField.value.length;
+            charCount.textContent = length;
+            charCount.className = length > 160 ? 'text-red-500' : '';
+        });
+
+        // Form submission
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const to = document.getElementById('to').value;
+            const msg = document.getElementById('msg').value;
+
+            if (!validatePhoneNumber(to)) {
+                showError('Invalid Bangladeshi phone number format');
+                return;
+            }
+
+            if (getRemainingMessages() <= 0) {
+                showError('Rate limit exceeded (5 messages/hour)');
+                return;
+            }
+
+            // UI states
+            submitBtn.innerHTML = `
+                <div class="flex items-center justify-center gap-2">
+                    <svg class="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Sending...
+                </div>
+            `;
+            submitBtn.disabled = true;
+            responseDiv.classList.add('hidden');
+
+            try {
+                // Use CORS proxy
+                const proxyUrl = 'https://corsproxy.io/?';
+                const params = new URLSearchParams({
+                    user: API_USER,
+                    key: API_KEY,
+                    to: to,
+                    msg: msg
+                });
+
+                const response = await fetch(proxyUrl + `https://sendmysms.net/api.php?${params}`, {
+                    headers: { 'Accept': 'application/json' }
+                });
+
+
+                if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+                
+                const data = await response.json();
+                
+                if (data.status === 'OK') {
+                    recordMessageSent();
+                    showSuccess(data.response);
+                } else {
+                    showError(data.response);
+                }
+
+            } catch (error) {
+                showError(error.message.includes('Failed to fetch') 
+                    ? 'Network error - please check your internet connection' 
+                    : error.message);
+                console.error('Error:', error);
+            } finally {
+                submitBtn.innerHTML = 'Send SMS';
+                submitBtn.disabled = getRemainingMessages() <= 0;
+                updateRateLimitUI();
+            }
+        });
+
+        function validatePhoneNumber(number) {
+            return /^01\d{9}$/.test(number);
+        }
+
+        function getRemainingMessages() {
+            const now = Date.now();
+            sendHistory = sendHistory.filter(timestamp => now - timestamp < RATE_LIMIT_DURATION);
+            return MAX_MESSAGES - sendHistory.length;
+        }
+
+        function recordMessageSent() {
+            sendHistory.push(Date.now());
+            localStorage.setItem('smsSendHistory', JSON.stringify(sendHistory));
+        }
+
+        function updateRateLimitUI() {
+            const remaining = getRemainingMessages();
+            const used = MAX_MESSAGES - remaining;
+            rateLimitProgress.style.width = `${(used / MAX_MESSAGES) * 100}%`;
+            rateLimitText.textContent = `${remaining} messages remaining (resets hourly)`;
+            submitBtn.disabled = remaining <= 0;
+        }
+
+        function showSuccess(message) {
+            responseDiv.classList.remove('bg-red-100', 'text-red-700');
+            responseDiv.classList.add('bg-green-100', 'text-green-700');
+            responseDiv.textContent = message;
+            responseDiv.classList.remove('hidden');
+        }
+
+        function showError(message) {
+            responseDiv.classList.remove('bg-green-100', 'text-green-700');
+            responseDiv.classList.add('bg-red-100', 'text-red-700');
+            responseDiv.textContent = message;
+            responseDiv.classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>
